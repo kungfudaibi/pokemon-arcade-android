@@ -14,6 +14,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
+import net.pokerogue.livewrapper.MainActivity as RogueActivity
 import java.io.File
 
 class MainActivity : ComponentActivity() {
@@ -121,9 +122,9 @@ class MainActivity : ComponentActivity() {
             textAction(tools, "游戏管理", 0) { showGameActions(game) }
         }
 
-        section(column, "在线游戏", "已安装应用可直接打开")
-        appCard(column, R.drawable.showdown_icon, "Pokémon Showdown", "对战、配队与观战", "dev.local.showdownnative")
-        appCard(column, R.drawable.rogue_icon, "PokéRogue", "实时更新的肉鸽冒险", "net.pokerogue.livewrapper")
+        section(column, "在线游戏", "内置 · 需要联网")
+        appCard(column, R.drawable.showdown_icon, "Pokémon Showdown", "对战、配队与观战", dev.local.showdownnative.MainActivity::class.java)
+        appCard(column, R.drawable.rogue_icon, "PokéRogue", "实时更新的肉鸽冒险", RogueActivity::class.java)
         label(column, "GBA 游戏使用 mGBA 核心", 11, muted).apply {
             setPadding(0, dp(15), 0, 0)
         }
@@ -166,7 +167,7 @@ class MainActivity : ComponentActivity() {
             }.show()
     }
 
-    private fun appCard(parent: LinearLayout, icon: Int, title: String, subtitle: String, packageName: String) {
+    private fun appCard(parent: LinearLayout, icon: Int, title: String, subtitle: String, activity: Class<*>) {
         val line = card(parent, panel, dp(12))
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         line.addView(row)
@@ -176,10 +177,7 @@ class MainActivity : ComponentActivity() {
         row.addView(copy, LinearLayout.LayoutParams(0, -2, 1f))
         label(copy, title, 17, white, true)
         label(copy, subtitle, 12, muted)
-        action(line, "启动", false) {
-            val launch = packageManager.getLaunchIntentForPackage(packageName)
-            if (launch == null) message("这款游戏尚未安装在本机") else startActivity(launch)
-        }
+        action(line, "启动", false) { startActivity(Intent(this, activity)) }
     }
 
     private fun section(parent: LinearLayout, title: String, aside: String) {
