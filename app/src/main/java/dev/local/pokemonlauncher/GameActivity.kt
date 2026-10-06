@@ -5,6 +5,8 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.Gravity
 import android.view.InputDevice
 import android.view.KeyEvent
@@ -44,6 +46,8 @@ class GameActivity : ComponentActivity() {
     private lateinit var startSelect: LinearLayout
     private lateinit var menuButton: TextView
     private lateinit var speedButton: TextView
+    private val turboHandler = Handler(Looper.getMainLooper())
+    private val turboButtons = mutableMapOf<View, Pair<Int, Runnable>>()
     private var ready = false
     private val preferences by lazy { getSharedPreferences("emulator", MODE_PRIVATE) }
     private val ink = Color.rgb(13, 21, 27)
@@ -115,6 +119,7 @@ class GameActivity : ComponentActivity() {
             FrameLayout.LayoutParams(dp(58), dp(58)).apply { leftMargin = dp(5); topMargin = dp(67) })
         actions.addView(touchButton("A", KeyEvent.KEYCODE_BUTTON_A, true),
             FrameLayout.LayoutParams(dp(58), dp(58)).apply { leftMargin = dp(76); topMargin = dp(23) })
+        updateTurboLabels()
         leftShoulder = touchButton("L", KeyEvent.KEYCODE_BUTTON_L1, false)
         rightShoulder = touchButton("R", KeyEvent.KEYCODE_BUTTON_R1, false)
         root.addView(leftShoulder)
@@ -138,7 +143,7 @@ class GameActivity : ComponentActivity() {
             topMargin = dp(6)
         })
         speedButton = TextView(this).apply {
-            textSize = 15f
+            textSize = 14f
             setTypeface(null, Typeface.BOLD)
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
@@ -162,10 +167,11 @@ class GameActivity : ComponentActivity() {
         gameFrame.layoutParams = FrameLayout.LayoutParams(frameWidth, height,
             Gravity.CENTER).apply { }
         retro.setResizeMode(AspectRatioGLSurfaceView.RESIZE_MODE_FILL)
+        // Shoulder keys own the outer corners; utility controls sit inside them.
         menuButton.layoutParams = FrameLayout.LayoutParams(dp(54), dp(42), Gravity.TOP or Gravity.LEFT)
-            .apply { leftMargin = dp(12); topMargin = dp(12) }
-        speedButton.layoutParams = FrameLayout.LayoutParams(dp(66), dp(42), Gravity.TOP or Gravity.RIGHT)
-            .apply { rightMargin = dp(12); topMargin = dp(12) }
+            .apply { leftMargin = dp(132); topMargin = dp(12) }
+        speedButton.layoutParams = FrameLayout.LayoutParams(dp(92), dp(42), Gravity.TOP or Gravity.RIGHT)
+            .apply { rightMargin = dp(132); topMargin = dp(12) }
         val visible = if (controlsVisible) View.VISIBLE else View.GONE
         listOf(dpad, actions, leftShoulder, rightShoulder, startSelect).forEach { it.visibility = visible }
         if (!controlsVisible) return
@@ -198,18 +204,65 @@ class GameActivity : ComponentActivity() {
         setOnTouchListener { view, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    if (ready) retro.sendKeyEvent(KeyEvent.ACTION_DOWN, code)
+                    if (isTurboEnabled(code)) startTurbo(view, code)
+                    else if (ready) retro.sendKeyEvent(KeyEvent.ACTION_DOWN, code)
                     view.alpha = .7f
                     true
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    if (ready) retro.sendKeyEvent(KeyEvent.ACTION_UP, code)
+                    stopTurbo(view, code)
                     view.alpha = 1f
                     true
                 }
                 else -> true
             }
         }
+    }
+
+    private fun isTurboEnabled(code: Int): Boolean {
+        val mode = preferences.getInt("turboMode", 0)
+        return when (code) {
+            KeyEvent.KEYCODE_BUTTON_A -> mode == 1 || mode == 3
+            KeyEvent.KEYCODE_BUTTON_B -> mode == 2 || mode == 3
+            else -> false
+        }
+    }
+
+    private fun updateTurboLabels() {
+        if (!::actions.isInitialized || actions.childCount < 2) return
+        (actions.getChildAt(0) as TextView).apply {
+            val turbo = isTurboEnabled(KeyEvent.KEYCODE_BUTTON_B)
+            text = if (turbo) "B↻" else "B"
+            contentDescription = if (turbo) "B 键，按住连按" else "B 键"
+        }
+        (actions.getChildAt(1) as TextView).apply {
+            val turbo = isTurboEnabled(KeyEvent.KEYCODE_BUTTON_A)
+            text = if (turbo) "A↻" else "A"
+            contentDescription = if (turbo) "A 键，按住连按" else "A 键"
+        }
+    }
+
+    private fun startTurbo(view: View, code: Int) {
+        if (!ready) return
+        stopTurbo(view, code)
+        val halfPeriodMs = (500L / preferences.getInt("turboRate", 8)).coerceAtLeast(25L)
+        var pressed = true
+        retro.sendKeyEvent(KeyEvent.ACTION_DOWN, code)
+        val pulse = object : Runnable {
+            override fun run() {
+                if (turboButtons[view]?.second !== this || !ready) return
+                pressed = !pressed
+                retro.sendKeyEvent(if (pressed) KeyEvent.ACTION_DOWN else KeyEvent.ACTION_UP, code)
+                turboHandler.postDelayed(this, halfPeriodMs)
+            }
+        }
+        turboButtons[view] = code to pulse
+        turboHandler.postDelayed(pulse, halfPeriodMs)
+    }
+
+    private fun stopTurbo(view: View, code: Int) {
+        turboButtons.remove(view)?.let { turboHandler.removeCallbacks(it.second) }
+        if (ready) retro.sendKeyEvent(KeyEvent.ACTION_UP, code)
     }
 
     private fun buttonBackground(round: Boolean) = GradientDrawable().apply {
@@ -219,7 +272,7 @@ class GameActivity : ComponentActivity() {
     }
 
     private fun applyControlStyle() {
-        val scale = preferences.getInt("controlScale", 100) / 100f
+        val scale = preferences.getInt("controlScale", 90) / 100f
         val opacity = preferences.getInt("controlOpacity", 85) / 100f
         listOf(dpad, actions, leftShoulder, rightShoulder, startSelect).forEach {
             it.scaleX = scale
@@ -229,7 +282,7 @@ class GameActivity : ComponentActivity() {
     }
 
     private fun showControlSettings() {
-        val scale = preferences.getInt("controlScale", 100)
+        val scale = preferences.getInt("controlScale", 90)
         val opacity = preferences.getInt("controlOpacity", 85)
         dialog().setTitle("触屏按键")
             .setItems(arrayOf("按键大小：$scale%", "按键透明度：$opacity%")) { _, index ->
@@ -381,13 +434,15 @@ class GameActivity : ComponentActivity() {
         val speed = preferences.getInt("speed", 1)
         val controls = preferences.getBoolean("controls", true)
         val audio = preferences.getBoolean("audio", true)
+        val turboMode = preferences.getInt("turboMode", 0)
         dialog().setTitle("游戏设置").setItems(arrayOf(
             "运行速度：${speed}×",
             "画面比例：${if (preferences.getBoolean("fillScreen", true)) "铺满屏幕" else "原始 3:2"}",
             "画面滤镜",
             "音效：${if (audio) "开" else "关"}",
             "触屏按键：${if (controls) "显示" else "隐藏"}",
-            "按键大小与透明度"
+            "按键大小与透明度",
+            "连按：${arrayOf("关闭", "A", "B", "A + B").getOrElse(turboMode) { "关闭" }}"
         )) { _, index ->
             when (index) {
                 0 -> showSpeedSelector()
@@ -402,12 +457,33 @@ class GameActivity : ComponentActivity() {
                     layoutScreen(root.width, root.height)
                 }
                 5 -> showControlSettings()
+                6 -> showTurboSettings()
             }
         }.show()
     }
 
+    private fun showTurboSettings() {
+        val mode = preferences.getInt("turboMode", 0)
+        val rate = preferences.getInt("turboRate", 8)
+        dialog().setTitle("按住时连按")
+            .setItems(arrayOf("关闭", "A 键连按", "B 键连按", "A、B 键都连按", "连按频率：每秒 $rate 次")) { _, choice ->
+                if (choice < 4) {
+                    preferences.edit().putInt("turboMode", choice).apply()
+                    updateTurboLabels()
+                    message(if (choice == 0) "已关闭连按" else "按住对应按键时自动连按")
+                } else {
+                    val rates = intArrayOf(6, 8, 10, 12)
+                    dialog().setTitle("连按频率")
+                        .setSingleChoiceItems(rates.map { "每秒 $it 次" }.toTypedArray(), rates.indexOf(rate)) { picker, index ->
+                            preferences.edit().putInt("turboRate", rates[index]).apply()
+                            picker.dismiss()
+                        }.show()
+                }
+            }.show()
+    }
+
     private fun updateSpeedButton() {
-        if (::speedButton.isInitialized) speedButton.text = "${preferences.getInt("speed", 1)}× »"
+        if (::speedButton.isInitialized) speedButton.text = "快进 ${preferences.getInt("speed", 1)}×"
     }
 
     private fun showSpeedSelector() {
@@ -534,6 +610,7 @@ class GameActivity : ComponentActivity() {
     }
 
     override fun onPause() {
+        turboButtons.toMap().forEach { (view, button) -> stopTurbo(view, button.first) }
         if (::retro.isInitialized && ready) runCatching {
             val bytes = retro.serializeSRAM()
             if (bytes.isNotEmpty()) atomicWrite(library.saveFile(game), bytes)
