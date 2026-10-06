@@ -1,10 +1,13 @@
 package dev.local.pokemonlauncher
 
 import android.content.Intent
+import android.net.Uri
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
+import android.os.Build
+import android.provider.Settings
 import android.view.Gravity
 import android.view.View
 import android.widget.ImageView
@@ -14,11 +17,20 @@ import android.widget.ScrollView
 import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
-import net.pokerogue.livewrapper.MainActivity as RogueActivity
+import androidx.core.content.FileProvider
 import java.io.File
 
 class MainActivity : ComponentActivity() {
     private val library by lazy { RomLibrary(this) }
+    private val modules by lazy { GameModules(this) }
+    private val releases = mutableMapOf<String, ModuleRelease>()
+    private val moduleErrors = mutableMapOf<String, String>()
+    private val checkedAt = mutableMapOf<String, Long>()
+    private val checking = mutableSetOf<String>()
+    private val moduleStatusViews = mutableMapOf<String, TextView>()
+    private var libraryScroll: ScrollView? = null
+    private var downloadingModule: String? = null
+    private var pendingInstall: File? = null
     private val ink = Color.rgb(33, 39, 46)
     private val panel = Color.WHITE
     private val white = Color.rgb(33, 39, 46)
@@ -67,6 +79,15 @@ class MainActivity : ComponentActivity() {
                 ?: error("无法写入目标文件")
         }.onSuccess { message("存档已导出") }.onFailure { message(it.message ?: "导出失败") }
     }
+    private val unknownAppSource = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        val file = pendingInstall
+        if (file != null && packageManager.canRequestPackageInstalls()) openInstaller(file)
+        else message("请允许游戏馆安装应用后重试")
+    }
+    private val moduleInstaller = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        pendingInstall = null
+        render()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -82,6 +103,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun render() {
+        val scrollPosition = libraryScroll?.scrollY ?: 0
+        moduleStatusViews.clear()
         val scroll = ScrollView(this).apply { isFillViewport = true; setBackgroundColor(canvas) }
         val column = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -89,6 +112,8 @@ class MainActivity : ComponentActivity() {
         }
         scroll.addView(column)
         setContentView(scroll)
+        libraryScroll = scroll
+        scroll.post { if (libraryScroll === scroll) scroll.scrollTo(0, scrollPosition) }
 
         label(column, "本机游戏", 30, white, true)
         val games = library.all()
@@ -122,12 +147,12 @@ class MainActivity : ComponentActivity() {
             textAction(tools, "游戏管理", 0) { showGameActions(game) }
         }
 
-        section(column, "在线游戏", "内置 · 需要联网")
-        appCard(column, R.drawable.showdown_icon, "Pokémon Showdown", "对战、配队与观战", dev.local.showdownnative.MainActivity::class.java)
-        appCard(column, R.drawable.rogue_icon, "PokéRogue", "实时更新的肉鸽冒险", RogueActivity::class.java)
+        section(column, "在线游戏", "按需下载 · 独立更新")
+        modules.entries.forEach { moduleCard(column, it) }
         label(column, "GBA 游戏使用 mGBA 核心", 11, muted).apply {
             setPadding(0, dp(15), 0, 0)
         }
+        modules.entries.forEach { checkModule(it) }
     }
 
     private fun openGame(game: Game) {
@@ -167,17 +192,93 @@ class MainActivity : ComponentActivity() {
             }.show()
     }
 
-    private fun appCard(parent: LinearLayout, icon: Int, title: String, subtitle: String, activity: Class<*>) {
+    private fun moduleCard(parent: LinearLayout, module: GameModule) {
         val line = card(parent, panel, dp(12))
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         line.addView(row)
-        row.addView(ImageView(this).apply { setImageResource(icon); scaleType = ImageView.ScaleType.FIT_CENTER },
+        row.addView(ImageView(this).apply { setImageResource(module.icon); scaleType = ImageView.ScaleType.FIT_CENTER },
             LinearLayout.LayoutParams(dp(50), dp(50)))
         val copy = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(14), 0, 0, 0) }
         row.addView(copy, LinearLayout.LayoutParams(0, -2, 1f))
-        label(copy, title, 17, white, true)
-        label(copy, subtitle, 12, muted)
-        action(line, "启动", false) { startActivity(Intent(this, activity)) }
+        label(copy, module.title, 17, white, true)
+        label(copy, module.subtitle, 12, muted)
+        val installed = modules.installed(module)
+        val release = releases[module.id]
+        val status = when {
+            downloadingModule == module.id -> "正在下载安装包…"
+            installed == null && release != null -> "未安装 · 最新 ${release.tag}"
+            installed == null -> "未安装 · ${moduleErrors[module.id] ?: "检查版本中"}"
+            release != null && modules.hasUpdate(installed, release) -> "已安装 ${installed.versionName} · 有新版 ${release.tag}"
+            installed != null -> "已安装 ${installed.versionName} · ${moduleErrors[module.id] ?: "可直接启动"}"
+            else -> "检查版本中"
+        }
+        moduleStatusViews[module.id] = label(copy, status, 12, muted)
+        if (installed == null) {
+            action(line, if (downloadingModule == module.id) "下载中…" else "下载并安装", true) { downloadModule(module) }
+        } else {
+            action(line, "启动", false) {
+                val launch = modules.launch(module)
+                if (launch == null) message("无法打开 ${module.title}") else startActivity(launch)
+            }
+            if (release != null && modules.hasUpdate(installed, release)) {
+                action(line, "更新到 ${release.tag}", true) { downloadModule(module) }
+            }
+        }
+    }
+
+    private fun checkModule(module: GameModule, force: Boolean = false) {
+        if (module.id in checking) return
+        if (!force && System.currentTimeMillis() - (checkedAt[module.id] ?: 0L) < 5 * 60_000) return
+        checking += module.id
+        Thread {
+            val result = runCatching { modules.latest(module) }
+            runOnUiThread {
+                checkedAt[module.id] = System.currentTimeMillis()
+                checking -= module.id
+                result.onSuccess { releases[module.id] = it; moduleErrors.remove(module.id) }
+                    .onFailure { moduleErrors[module.id] = it.message ?: "版本检查失败" }
+                render()
+            }
+        }.start()
+    }
+
+    private fun downloadModule(module: GameModule) {
+        if (downloadingModule != null) return
+        downloadingModule = module.id
+        render()
+        Thread {
+            val result = runCatching {
+                val release = releases[module.id] ?: modules.latest(module)
+                modules.download(module, release) { percent ->
+                    runOnUiThread { moduleStatusViews[module.id]?.text = "正在下载 ${release.tag} · $percent%" }
+                }
+            }
+            runOnUiThread {
+                downloadingModule = null
+                result.onSuccess { pendingInstall = it; promptInstall(it) }
+                    .onFailure { message(it.message ?: "模块下载失败") }
+                render()
+            }
+        }.start()
+    }
+
+    private fun promptInstall(file: File) {
+        if (Build.VERSION.SDK_INT >= 26 && !packageManager.canRequestPackageInstalls()) {
+            runCatching {
+                unknownAppSource.launch(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    Uri.parse("package:$packageName")))
+            }.onFailure { message("无法打开安装权限设置：${it.message}") }
+        } else openInstaller(file)
+    }
+
+    private fun openInstaller(file: File) {
+        val uri = FileProvider.getUriForFile(this, "$packageName.modulefiles", file)
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, "application/vnd.android.package-archive")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        runCatching { moduleInstaller.launch(intent) }
+            .onFailure { message("无法打开系统安装器：${it.message}") }
     }
 
     private fun section(parent: LinearLayout, title: String, aside: String) {
