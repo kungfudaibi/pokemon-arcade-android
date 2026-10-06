@@ -220,7 +220,7 @@ class GameActivity : ComponentActivity() {
     }
 
     private fun isTurboEnabled(code: Int): Boolean {
-        val mode = preferences.getInt("turboMode", 0)
+        val mode = preferences.getInt("turboMode", 1)
         return when (code) {
             KeyEvent.KEYCODE_BUTTON_A -> mode == 1 || mode == 3
             KeyEvent.KEYCODE_BUTTON_B -> mode == 2 || mode == 3
@@ -233,12 +233,12 @@ class GameActivity : ComponentActivity() {
         (actions.getChildAt(0) as TextView).apply {
             val turbo = isTurboEnabled(KeyEvent.KEYCODE_BUTTON_B)
             text = if (turbo) "B↻" else "B"
-            contentDescription = if (turbo) "B 键，按住连按" else "B 键"
+            contentDescription = if (turbo) "B 键，长按连按" else "B 键"
         }
         (actions.getChildAt(1) as TextView).apply {
             val turbo = isTurboEnabled(KeyEvent.KEYCODE_BUTTON_A)
             text = if (turbo) "A↻" else "A"
-            contentDescription = if (turbo) "A 键，按住连按" else "A 键"
+            contentDescription = if (turbo) "A 键，长按连按" else "A 键"
         }
     }
 
@@ -257,7 +257,8 @@ class GameActivity : ComponentActivity() {
             }
         }
         turboButtons[view] = code to pulse
-        turboHandler.postDelayed(pulse, halfPeriodMs)
+        // A quick tap is one ordinary press. Repeat only after a deliberate hold.
+        turboHandler.postDelayed(pulse, 300L)
     }
 
     private fun stopTurbo(view: View, code: Int) {
@@ -434,7 +435,7 @@ class GameActivity : ComponentActivity() {
         val speed = preferences.getInt("speed", 1)
         val controls = preferences.getBoolean("controls", true)
         val audio = preferences.getBoolean("audio", true)
-        val turboMode = preferences.getInt("turboMode", 0)
+        val turboMode = preferences.getInt("turboMode", 1)
         dialog().setTitle("游戏设置").setItems(arrayOf(
             "运行速度：${speed}×",
             "画面比例：${if (preferences.getBoolean("fillScreen", true)) "铺满屏幕" else "原始 3:2"}",
@@ -442,7 +443,7 @@ class GameActivity : ComponentActivity() {
             "音效：${if (audio) "开" else "关"}",
             "触屏按键：${if (controls) "显示" else "隐藏"}",
             "按键大小与透明度",
-            "连按：${arrayOf("关闭", "A", "B", "A + B").getOrElse(turboMode) { "关闭" }}"
+            "长按连按：${arrayOf("关闭", "A", "B", "A + B").getOrElse(turboMode) { "A" }}"
         )) { _, index ->
             when (index) {
                 0 -> showSpeedSelector()
@@ -463,14 +464,15 @@ class GameActivity : ComponentActivity() {
     }
 
     private fun showTurboSettings() {
-        val mode = preferences.getInt("turboMode", 0)
+        val mode = preferences.getInt("turboMode", 1)
         val rate = preferences.getInt("turboRate", 8)
-        dialog().setTitle("按住时连按")
+        dialog().setTitle("长按连按")
+            .setMessage("轻点按一次；按住约 0.3 秒后自动连按，松手停止。A 键默认开启，B 键可单独开启。")
             .setItems(arrayOf("关闭", "A 键连按", "B 键连按", "A、B 键都连按", "连按频率：每秒 $rate 次")) { _, choice ->
                 if (choice < 4) {
                     preferences.edit().putInt("turboMode", choice).apply()
                     updateTurboLabels()
-                    message(if (choice == 0) "已关闭连按" else "按住对应按键时自动连按")
+                    message(if (choice == 0) "已关闭长按连按" else "轻点单次，长按约 0.3 秒后连按")
                 } else {
                     val rates = intArrayOf(6, 8, 10, 12)
                     dialog().setTitle("连按频率")
