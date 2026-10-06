@@ -18,11 +18,12 @@ import java.io.File
 
 class MainActivity : ComponentActivity() {
     private val library by lazy { RomLibrary(this) }
-    private val ink = Color.rgb(14, 22, 30)
-    private val panel = Color.rgb(30, 43, 52)
-    private val white = Color.rgb(243, 245, 238)
-    private val muted = Color.rgb(171, 192, 190)
-    private val mint = Color.rgb(112, 222, 184)
+    private val ink = Color.rgb(33, 39, 46)
+    private val panel = Color.WHITE
+    private val white = Color.rgb(33, 39, 46)
+    private val muted = Color.rgb(127, 135, 143)
+    private val mint = Color.rgb(242, 112, 52)
+    private val canvas = Color.rgb(247, 248, 250)
     private var selectedGame: Game? = null
     private fun pendingGame(): Game? = selectedGame ?: library.game(
         getPreferences(MODE_PRIVATE).getString("pendingSaveGame", "") ?: ""
@@ -68,8 +69,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.statusBarColor = ink
-        window.navigationBarColor = ink
+        window.statusBarColor = canvas
+        window.navigationBarColor = canvas
+        window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
         render()
     }
 
@@ -79,53 +81,50 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun render() {
-        val scroll = ScrollView(this).apply { isFillViewport = true; setBackgroundColor(ink) }
+        val scroll = ScrollView(this).apply { isFillViewport = true; setBackgroundColor(canvas) }
         val column = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(21), dp(20), dp(32))
+            setPadding(dp(18), dp(22), dp(18), dp(32))
         }
         scroll.addView(column)
         setContentView(scroll)
 
-        label(column, "POKÉMON ARCADE", 13, mint, true).letterSpacing = .18f
-        label(column, "我的游戏馆", 34, white, true).apply { setPadding(0, dp(8), 0, 0) }
-        label(column, "从上次进度继续，或开启一场新冒险。", 14, muted)
-
+        label(column, "本机游戏", 30, white, true)
         val games = library.all()
-        val lastId = getPreferences(MODE_PRIVATE).getString("lastGame", null)
-        val last = games.firstOrNull { it.id == lastId }
-        val hero = card(column, Color.rgb(29, 72, 72), dp(18))
-        label(hero, "继续游玩", 14, mint, true)
-        label(hero, last?.title ?: "准备好你的 GBA 冒险", 22, white, true).apply { setPadding(0, dp(6), 0, dp(9)) }
-        label(hero, if (last == null) "导入自己的 .gba 或 .zip 游戏文件，就可以在这里开始。"
-            else "普通存档自动保留在游戏馆中。", 13, Color.rgb(206, 225, 220))
-        action(hero, if (last == null) "导入 GBA 游戏  ↗" else "继续游戏  ↗", true) {
-            if (last == null) chooseRom.launch(arrayOf("*/*")) else openGame(last)
-        }
-
-        section(column, "GBA 游戏库", "${games.size} 个游戏")
-        action(column, "＋  导入 GBA 游戏（.gba / .zip）", false) { chooseRom.launch(arrayOf("*/*")) }
+        label(column, "${games.size} 款 GBA 游戏 · 2 款在线游戏", 13, muted)
+        action(column, "＋  导入 GBA 游戏", true) { chooseRom.launch(arrayOf("*/*")) }
+        section(column, "GBA", "本机")
         if (games.isEmpty()) {
             val empty = card(column, panel, dp(14))
             label(empty, "游戏会出现在这里", 17, white, true)
-            label(empty, "支持触屏按键、普通存档导入导出和即时存档。", 13, muted)
+            label(empty, "导入自己的 .gba 或 .zip 游戏文件即可开始。", 13, muted)
         }
         games.forEach { game ->
-            val item = card(column, panel, dp(13))
-            label(item, game.title, 18, white, true)
-            val hasSave = library.saveFile(game).exists()
-            label(item, if (hasSave) "GBA  ·  有普通存档" else "GBA  ·  尚无普通存档", 12, muted)
-            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            val item = card(column, panel, dp(15))
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
             item.addView(row)
-            action(row, "开始游戏", true, 1.2f) { openGame(game) }
-            action(row, "存档", false, 1f) { showSaveActions(game) }
-            action(row, "管理", false, .8f) { showGameActions(game) }
+            row.addView(TextView(this).apply {
+                text = "GBA"; textSize = 17f; setTypeface(null, Typeface.BOLD)
+                setTextColor(mint); gravity = Gravity.CENTER
+                background = GradientDrawable().apply {
+                    setColor(Color.rgb(255, 239, 225)); cornerRadius = dp(12).toFloat()
+                }
+            }, LinearLayout.LayoutParams(dp(60), dp(60)))
+            val details = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(13), 0, 0, 0) }
+            row.addView(details, LinearLayout.LayoutParams(0, -2, 1f))
+            label(details, game.title, 16, white, true).maxLines = 2
+            label(details, if (library.saveFile(game).exists()) "GBA · 有存档" else "GBA · 尚无存档", 12, muted)
+            smallAction(row, "启动") { openGame(game) }
+            val tools = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            item.addView(tools, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(9) })
+            textAction(tools, "存档导入／导出", dp(73)) { showSaveActions(game) }
+            textAction(tools, "游戏管理", 0) { showGameActions(game) }
         }
 
         section(column, "在线游戏", "已安装应用可直接打开")
         appCard(column, R.drawable.showdown_icon, "Pokémon Showdown", "对战、配队与观战", "dev.local.showdownnative")
         appCard(column, R.drawable.rogue_icon, "PokéRogue", "实时更新的肉鸽冒险", "net.pokerogue.livewrapper")
-        label(column, "实验版 · GBA 核心采用 mGBA / LibretroDroid", 11, muted).apply {
+        label(column, "GBA 游戏使用 mGBA 核心", 11, muted).apply {
             setPadding(0, dp(15), 0, 0)
         }
     }
@@ -177,7 +176,7 @@ class MainActivity : ComponentActivity() {
         row.addView(copy, LinearLayout.LayoutParams(0, -2, 1f))
         label(copy, title, 17, white, true)
         label(copy, subtitle, 12, muted)
-        action(line, "打开游戏  ↗", false) {
+        action(line, "启动", false) {
             val launch = packageManager.getLaunchIntentForPackage(packageName)
             if (launch == null) message("这款游戏尚未安装在本机") else startActivity(launch)
         }
@@ -194,7 +193,10 @@ class MainActivity : ComponentActivity() {
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(padding, padding, padding, padding)
-            background = GradientDrawable().apply { setColor(color); cornerRadius = dp(18).toFloat() }
+            background = GradientDrawable().apply {
+                setColor(color); cornerRadius = dp(15).toFloat()
+                setStroke(dp(1), Color.rgb(230, 233, 236))
+            }
         }
         parent.addView(card, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(9) })
         return card
@@ -203,10 +205,10 @@ class MainActivity : ComponentActivity() {
     private fun action(parent: LinearLayout, title: String, strong: Boolean, weight: Float? = null, click: () -> Unit) {
         val button = TextView(this).apply {
             text = title; textSize = 14f; setTypeface(null, Typeface.BOLD)
-            setTextColor(if (strong) ink else white)
+            setTextColor(if (strong) Color.WHITE else ink)
             gravity = Gravity.CENTER
             background = GradientDrawable().apply {
-                setColor(if (strong) mint else Color.rgb(55, 73, 80)); cornerRadius = dp(11).toFloat()
+                setColor(if (strong) mint else Color.rgb(240, 242, 244)); cornerRadius = dp(11).toFloat()
             }
             setOnClickListener { click() }
         }
@@ -215,6 +217,27 @@ class MainActivity : ComponentActivity() {
         params.topMargin = dp(11)
         if (weight != null) params.marginEnd = dp(5)
         parent.addView(button, params)
+    }
+
+    private fun smallAction(parent: LinearLayout, title: String, click: () -> Unit) {
+        val button = TextView(this).apply {
+            text = title; textSize = 14f; setTypeface(null, Typeface.BOLD)
+            setTextColor(mint); gravity = Gravity.CENTER
+            background = GradientDrawable().apply {
+                setColor(Color.WHITE); cornerRadius = dp(9).toFloat()
+                setStroke(dp(1), mint)
+            }
+            setOnClickListener { click() }
+        }
+        parent.addView(button, LinearLayout.LayoutParams(dp(66), dp(42)))
+    }
+
+    private fun textAction(parent: LinearLayout, title: String, leftPadding: Int, click: () -> Unit) {
+        parent.addView(TextView(this).apply {
+            text = title; textSize = 12f; setTextColor(muted)
+            setPadding(leftPadding, dp(5), dp(14), dp(5))
+            setOnClickListener { click() }
+        })
     }
 
     private fun label(parent: LinearLayout, value: String, size: Int, color: Int, bold: Boolean = false): TextView {

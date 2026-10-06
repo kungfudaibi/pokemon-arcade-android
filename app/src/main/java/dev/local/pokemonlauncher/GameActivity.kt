@@ -10,6 +10,7 @@ import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
+import android.text.InputType
 import android.widget.FrameLayout
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -20,6 +21,7 @@ import androidx.activity.OnBackPressedCallback
 import androidx.lifecycle.lifecycleScope
 import com.swordfish.libretrodroid.GLRetroView
 import com.swordfish.libretrodroid.GLRetroViewData
+import com.swordfish.libretrodroid.AspectRatioGLSurfaceView
 import com.swordfish.libretrodroid.LibretroDroid
 import com.swordfish.libretrodroid.ShaderConfig
 import kotlinx.coroutines.launch
@@ -41,6 +43,7 @@ class GameActivity : ComponentActivity() {
     private lateinit var rightShoulder: TextView
     private lateinit var startSelect: LinearLayout
     private lateinit var menuButton: TextView
+    private lateinit var speedButton: TextView
     private var ready = false
     private val preferences by lazy { getSharedPreferences("emulator", MODE_PRIVATE) }
     private val ink = Color.rgb(13, 21, 27)
@@ -62,6 +65,7 @@ class GameActivity : ComponentActivity() {
             shader = shaderFromIndex(preferences.getInt("shader", 0))
             preferLowLatencyAudio = true
         })
+        retro.setResizeMode(AspectRatioGLSurfaceView.RESIZE_MODE_FILL)
         lifecycle.addObserver(retro)
         buildScreen()
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -72,6 +76,7 @@ class GameActivity : ComponentActivity() {
                 if (event is GLRetroView.GLRetroEvents.FrameRendered && !ready) {
                     ready = true
                     retro.frameSpeed = preferences.getInt("speed", 1)
+                    updateSpeedButton()
                     retro.audioEnabled = preferences.getBoolean("audio", true)
                     applyCheats()
                 }
@@ -132,6 +137,17 @@ class GameActivity : ComponentActivity() {
         root.addView(menuButton, FrameLayout.LayoutParams(dp(48), dp(42), Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
             topMargin = dp(6)
         })
+        speedButton = TextView(this).apply {
+            textSize = 15f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            background = buttonBackground(false)
+            contentDescription = "切换游戏速度"
+            setOnClickListener { showSpeedSelector() }
+        }
+        root.addView(speedButton)
+        updateSpeedButton()
         root.addOnLayoutChangeListener { _, left, top, right, bottom, _, _, _, _ ->
             layoutScreen(right - left, bottom - top)
         }
@@ -141,16 +157,15 @@ class GameActivity : ComponentActivity() {
     private fun layoutScreen(width: Int, height: Int) {
         if (width <= 0 || height <= 0) return
         val controlsVisible = preferences.getBoolean("controls", true)
-        val margin = dp(6)
-        val screenWidth = min(
-            ((height - if (controlsVisible) dp(48) else margin * 2) * 1.5f).toInt(),
-            width - if (controlsVisible) dp(304) else margin * 2
-        )
-        val screenHeight = (screenWidth / 1.5f).toInt()
-        gameFrame.layoutParams = FrameLayout.LayoutParams(screenWidth, screenHeight,
-            Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply { topMargin = dp(4) }
-        menuButton.layoutParams = FrameLayout.LayoutParams(dp(48), dp(42), Gravity.TOP or Gravity.LEFT)
-            .apply { leftMargin = dp(65); topMargin = dp(75) }
+        val fill = preferences.getBoolean("fillScreen", true)
+        val frameWidth = if (fill) width else min(width, (height * 1.5f).toInt())
+        gameFrame.layoutParams = FrameLayout.LayoutParams(frameWidth, height,
+            Gravity.CENTER).apply { }
+        retro.setResizeMode(AspectRatioGLSurfaceView.RESIZE_MODE_FILL)
+        menuButton.layoutParams = FrameLayout.LayoutParams(dp(54), dp(42), Gravity.TOP or Gravity.LEFT)
+            .apply { leftMargin = dp(12); topMargin = dp(12) }
+        speedButton.layoutParams = FrameLayout.LayoutParams(dp(66), dp(42), Gravity.TOP or Gravity.RIGHT)
+            .apply { rightMargin = dp(12); topMargin = dp(12) }
         val visible = if (controlsVisible) View.VISIBLE else View.GONE
         listOf(dpad, actions, leftShoulder, rightShoulder, startSelect).forEach { it.visibility = visible }
         if (!controlsVisible) return
@@ -198,7 +213,7 @@ class GameActivity : ComponentActivity() {
     }
 
     private fun buttonBackground(round: Boolean) = GradientDrawable().apply {
-        setColor(Color.rgb(35, 55, 65))
+        setColor(Color.argb(176, 24, 35, 44))
         cornerRadius = dp(if (round) 40 else 13).toFloat()
         setStroke(dp(1), Color.rgb(100, 140, 145))
     }
@@ -368,30 +383,84 @@ class GameActivity : ComponentActivity() {
         val audio = preferences.getBoolean("audio", true)
         dialog().setTitle("游戏设置").setItems(arrayOf(
             "运行速度：${speed}×",
+            "画面比例：${if (preferences.getBoolean("fillScreen", true)) "铺满屏幕" else "原始 3:2"}",
             "画面滤镜",
             "音效：${if (audio) "开" else "关"}",
             "触屏按键：${if (controls) "显示" else "隐藏"}",
             "按键大小与透明度"
         )) { _, index ->
             when (index) {
-                0 -> {
-                    val next = when (speed) { 1 -> 2; 2 -> 4; else -> 1 }
-                    preferences.edit().putInt("speed", next).apply()
-                    retro.frameSpeed = next
-                    message("速度 ${next}×")
-                }
-                1 -> selectShader()
-                2 -> {
+                0 -> showSpeedSelector()
+                1 -> showDisplaySelector()
+                2 -> selectShader()
+                3 -> {
                     retro.audioEnabled = !audio
                     preferences.edit().putBoolean("audio", !audio).apply()
                 }
-                3 -> {
+                4 -> {
                     preferences.edit().putBoolean("controls", !controls).apply()
                     layoutScreen(root.width, root.height)
                 }
-                4 -> showControlSettings()
+                5 -> showControlSettings()
             }
         }.show()
+    }
+
+    private fun updateSpeedButton() {
+        if (::speedButton.isInitialized) speedButton.text = "${preferences.getInt("speed", 1)}× »"
+    }
+
+    private fun showSpeedSelector() {
+        val speeds = intArrayOf(1, 2, 4, 8)
+        dialog().setTitle("游戏速度")
+            .setItems(arrayOf("1× · 正常", "2×", "4×", "8×", "自定义整数倍…")) { _, index ->
+                if (index < speeds.size) setSpeed(speeds[index]) else showCustomSpeed()
+            }.show()
+    }
+
+    private fun showCustomSpeed() {
+        val input = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_NUMBER
+            setSingleLine(true)
+            setText(preferences.getInt("speed", 1).toString())
+            selectAll()
+            setPadding(dp(24), dp(8), dp(24), dp(8))
+        }
+        val picker = dialog().setTitle("自定义倍速")
+            .setMessage("输入 1–16 的整数。实际速度受手机性能和游戏改版影响。")
+            .setView(input)
+            .setNegativeButton("取消", null)
+            .setPositiveButton("应用", null)
+            .create()
+        picker.setOnShowListener {
+            picker.getButton(android.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val speed = input.text.toString().toIntOrNull()
+                if (speed == null || speed !in 1..16) {
+                    input.error = "请输入 1–16 的整数"
+                } else {
+                    setSpeed(speed)
+                    picker.dismiss()
+                }
+            }
+        }
+        picker.show()
+    }
+
+    private fun setSpeed(speed: Int) {
+        preferences.edit().putInt("speed", speed).apply()
+        if (ready) retro.frameSpeed = speed
+        updateSpeedButton()
+        message("目标速度 ${speed}×")
+    }
+
+    private fun showDisplaySelector() {
+        val fill = preferences.getBoolean("fillScreen", true)
+        dialog().setTitle("画面比例")
+            .setSingleChoiceItems(arrayOf("铺满屏幕 · 宽屏会拉伸画面", "原始 3:2 · 不拉伸"), if (fill) 0 else 1) { dialog, index ->
+                preferences.edit().putBoolean("fillScreen", index == 0).apply()
+                layoutScreen(root.width, root.height)
+                dialog.dismiss()
+            }.show()
     }
 
     private fun dialog(): android.app.AlertDialog.Builder =
