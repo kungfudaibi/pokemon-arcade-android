@@ -1,0 +1,11 @@
+.gradle/
+.kotlin/
+build/
+app/build/
+local.properties
+vendor/
+*.aar
+.avd/
+demo/
+build-thread.txt
+launcher-screen.png

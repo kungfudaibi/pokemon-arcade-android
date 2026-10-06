@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <queries>
+        <package android:name="dev.local.showdownnative" />
+        <package android:name="net.pokerogue.livewrapper" />
+    </queries>
+    <application android:label="宝可梦游戏馆" android:icon="@drawable/launcher_icon"
+        android:theme="@android:style/Theme.Material.Light.NoActionBar"
+        android:usesCleartextTraffic="false">
+        <activity android:name=".GameActivity" android:screenOrientation="landscape" android:exported="false" />
+        <activity android:name=".MainActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
