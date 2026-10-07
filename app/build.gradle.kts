@@ -11,8 +11,8 @@ android {
         applicationId = "dev.local.pokemonlauncher"
         minSdk = 26
         targetSdk = 35
-        versionCode = 6
-        versionName = "0.4.0-demo"
+        versionCode = 7
+        versionName = "0.5.0-demo"
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
     }
     buildTypes {

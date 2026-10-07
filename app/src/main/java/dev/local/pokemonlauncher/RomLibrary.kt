@@ -30,6 +30,7 @@ class RomLibrary(private val context: Context) {
 
     fun game(id: String): Game? = all().firstOrNull { it.id == id }
     fun saveFile(game: Game): File = File(root, "${game.id}.sav")
+    fun quickStateFile(game: Game): File = File(root, "${game.id}.quick.state")
     fun stateFile(game: Game, slot: Int = 1): File {
         require(slot in 1..5)
         val legacy = File(root, "${game.id}.state")

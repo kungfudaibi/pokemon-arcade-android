@@ -2,9 +2,15 @@ package dev.local.pokemonlauncher
 
 import android.content.pm.ActivityInfo
 import android.graphics.Color
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.PixelFormat
 import android.graphics.Typeface
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
@@ -32,6 +38,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.min
+import kotlin.math.max
 
 class GameActivity : ComponentActivity() {
     private lateinit var game: Game
@@ -46,6 +53,9 @@ class GameActivity : ComponentActivity() {
     private lateinit var startSelect: LinearLayout
     private lateinit var menuButton: TextView
     private lateinit var speedButton: TextView
+    private lateinit var quickSaveButton: TextView
+    private lateinit var quickLoadButton: TextView
+    private lateinit var quickBar: LinearLayout
     private val turboHandler = Handler(Looper.getMainLooper())
     private val turboButtons = mutableMapOf<View, Pair<Int, Runnable>>()
     private var ready = false
@@ -99,7 +109,7 @@ class GameActivity : ComponentActivity() {
             addView(retro, FrameLayout.LayoutParams(-1, -1))
         }
         root.addView(gameFrame)
-        dpad = FrameLayout(this)
+        dpad = FrameLayout(this).apply { background = CrossPadBackground() }
         root.addView(dpad)
         val arrows = listOf(
             Triple("↑", KeyEvent.KEYCODE_DPAD_UP, 1 to 0),
@@ -139,9 +149,8 @@ class GameActivity : ComponentActivity() {
             contentDescription = "游戏菜单"
             setOnClickListener { showMenu() }
         }
-        root.addView(menuButton, FrameLayout.LayoutParams(dp(48), dp(42), Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
-            topMargin = dp(6)
-        })
+        quickSaveButton = utilityButton("快存", "快速存档，覆盖独立快捷进度") { quickSave() }
+        quickLoadButton = utilityButton("快读", "快速读取独立快捷进度，替换当前游戏进度") { quickLoad() }
         speedButton = TextView(this).apply {
             textSize = 14f
             setTypeface(null, Typeface.BOLD)
@@ -151,12 +160,36 @@ class GameActivity : ComponentActivity() {
             contentDescription = "切换游戏速度"
             setOnClickListener { showSpeedSelector() }
         }
-        root.addView(speedButton)
+        quickBar = LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            background = buttonBackground(false, 82)
+        }
+        root.addView(quickBar)
+        listOf(menuButton, quickSaveButton, quickLoadButton, speedButton).forEachIndexed { index, button ->
+            button.background = null
+            quickBar.addView(button, LinearLayout.LayoutParams(0, -1,
+                if (index == 3) 1.2f else if (index == 0) .7f else 1f).apply {
+                if (index > 0) marginStart = dp(2)
+            })
+        }
         updateSpeedButton()
+        updateQuickLoadButton()
         root.addOnLayoutChangeListener { _, left, top, right, bottom, _, _, _, _ ->
             layoutScreen(right - left, bottom - top)
         }
         applyControlStyle()
+        root.post { layoutScreen(root.width, root.height) }
+    }
+
+    private fun utilityButton(label: String, description: String, action: () -> Unit) = TextView(this).apply {
+        text = label
+        textSize = 14f
+        setTypeface(null, Typeface.BOLD)
+        setTextColor(accent)
+        gravity = Gravity.CENTER
+        background = buttonBackground(false)
+        contentDescription = description
+        setOnClickListener { action() }
     }
 
     private fun layoutScreen(width: Int, height: Int) {
@@ -167,28 +200,70 @@ class GameActivity : ComponentActivity() {
         gameFrame.layoutParams = FrameLayout.LayoutParams(frameWidth, height,
             Gravity.CENTER).apply { }
         retro.setResizeMode(AspectRatioGLSurfaceView.RESIZE_MODE_FILL)
-        // Shoulder keys own the outer corners; utility controls sit inside them.
-        menuButton.layoutParams = FrameLayout.LayoutParams(dp(54), dp(42), Gravity.TOP or Gravity.LEFT)
-            .apply { leftMargin = dp(132); topMargin = dp(12) }
-        speedButton.layoutParams = FrameLayout.LayoutParams(dp(92), dp(42), Gravity.TOP or Gravity.RIGHT)
-            .apply { rightMargin = dp(132); topMargin = dp(12) }
+        val cutout = if (Build.VERSION.SDK_INT >= 28) root.rootWindowInsets?.displayCutout else null
+        val sideInset = max(dp(24), (width * .045f).toInt()).coerceAtMost(dp(56))
+        val leftInset = max(sideInset, (cutout?.safeInsetLeft ?: 0) + dp(14))
+        val rightInset = max(sideInset, (cutout?.safeInsetRight ?: 0) + dp(14))
+        val topInset = max(dp(12), (cutout?.safeInsetTop ?: 0) + dp(8))
+        val bottomInset = max(dp(20), (cutout?.safeInsetBottom ?: 0) + dp(14))
+        val scale = preferences.getInt("controlScale", 90).coerceIn(80, 170) / 100f
+        val centralSpace = dp(164)
+        val baseDiameter = min((height * .48f).toInt(), dp(240))
+        val diameter = min(
+            min((baseDiameter * scale).toInt(), min((height * .63f).toInt(), dp(310))),
+            (width - leftInset - rightInset - centralSpace) / 2
+        ).coerceAtLeast(dp(108))
+        val shoulderWidth = (diameter * .62f).toInt().coerceIn(dp(88), dp(136))
+        val shoulderHeight = (diameter * .26f).toInt().coerceIn(dp(42), dp(54))
+        val toolbarWidth = min(dp(392), width - leftInset - rightInset - shoulderWidth * 2 - dp(18))
+        quickBar.layoutParams = FrameLayout.LayoutParams(toolbarWidth.coerceAtLeast(dp(190)),
+            shoulderHeight, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply { topMargin = topInset }
         val visible = if (controlsVisible) View.VISIBLE else View.GONE
         listOf(dpad, actions, leftShoulder, rightShoulder, startSelect).forEach { it.visibility = visible }
         if (!controlsVisible) return
-        dpad.layoutParams = FrameLayout.LayoutParams(dp(138), dp(138), Gravity.LEFT or Gravity.BOTTOM).apply {
-            leftMargin = dp(7); bottomMargin = dp(48)
+        val key = diameter / 3
+        listOf(1 to 0, 0 to 1, 2 to 1, 1 to 2).forEachIndexed { index, position ->
+            (dpad.getChildAt(index) as TextView).apply {
+                layoutParams = FrameLayout.LayoutParams(key, key).apply {
+                    leftMargin = position.first * key
+                    topMargin = position.second * key
+                }
+                textSize = (key / resources.displayMetrics.density * .37f).coerceIn(20f, 31f)
+            }
         }
-        actions.layoutParams = FrameLayout.LayoutParams(dp(138), dp(138), Gravity.RIGHT or Gravity.BOTTOM).apply {
-            rightMargin = dp(7); bottomMargin = dp(48)
+        val actionKey = (diameter * .39f).toInt()
+        listOf(.05f to .50f, .57f to .18f).forEachIndexed { index, position ->
+            (actions.getChildAt(index) as TextView).apply {
+                layoutParams = FrameLayout.LayoutParams(actionKey, actionKey).apply {
+                    leftMargin = (diameter * position.first).toInt()
+                    topMargin = (diameter * position.second).toInt()
+                }
+                textSize = (actionKey / resources.displayMetrics.density * .31f).coerceIn(21f, 29f)
+            }
         }
-        leftShoulder.layoutParams = FrameLayout.LayoutParams(dp(92), dp(42), Gravity.TOP or Gravity.LEFT).apply {
-            leftMargin = dp(24); topMargin = dp(12)
+        dpad.layoutParams = FrameLayout.LayoutParams(diameter, diameter, Gravity.LEFT or Gravity.BOTTOM).apply {
+            leftMargin = leftInset; bottomMargin = bottomInset + dp(28)
         }
-        rightShoulder.layoutParams = FrameLayout.LayoutParams(dp(92), dp(42), Gravity.TOP or Gravity.RIGHT).apply {
-            rightMargin = dp(24); topMargin = dp(12)
+        actions.layoutParams = FrameLayout.LayoutParams(diameter, diameter, Gravity.RIGHT or Gravity.BOTTOM).apply {
+            rightMargin = rightInset; bottomMargin = bottomInset + dp(28)
         }
-        startSelect.layoutParams = FrameLayout.LayoutParams(-2, dp(42),
-            Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = dp(5) }
+        leftShoulder.layoutParams = FrameLayout.LayoutParams(shoulderWidth, shoulderHeight, Gravity.TOP or Gravity.LEFT).apply {
+            leftMargin = leftInset; topMargin = topInset
+        }
+        rightShoulder.layoutParams = FrameLayout.LayoutParams(shoulderWidth, shoulderHeight, Gravity.TOP or Gravity.RIGHT).apply {
+            rightMargin = rightInset; topMargin = topInset
+        }
+        val centerWidth = width - leftInset - rightInset - diameter * 2
+        val startWidth = min((diameter * .45f).toInt(), (centerWidth - dp(10)) / 2).coerceAtLeast(dp(60))
+        val startHeight = (diameter * .26f).toInt().coerceIn(dp(44), dp(54))
+        listOf(0, 1).forEach { index ->
+            (startSelect.getChildAt(index) as TextView).layoutParams =
+                LinearLayout.LayoutParams(startWidth, startHeight).apply {
+                    if (index == 0) marginEnd = dp(10)
+                }
+        }
+        startSelect.layoutParams = FrameLayout.LayoutParams(-2, startHeight,
+            Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = bottomInset }
     }
 
     private fun touchButton(label: String, code: Int, round: Boolean): TextView = TextView(this).apply {
@@ -200,7 +275,8 @@ class GameActivity : ComponentActivity() {
         contentDescription = label
         isClickable = true
         alpha = 1f
-        background = buttonBackground(round)
+        background = if (label in listOf("↑", "←", "→", "↓")) null else buttonBackground(round)
+        setShadowLayer(dp(2).toFloat(), 0f, dp(1).toFloat(), Color.argb(210, 0, 0, 0))
         setOnTouchListener { view, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
@@ -266,18 +342,52 @@ class GameActivity : ComponentActivity() {
         if (ready) retro.sendKeyEvent(KeyEvent.ACTION_UP, code)
     }
 
-    private fun buttonBackground(round: Boolean) = GradientDrawable().apply {
-        setColor(Color.argb(176, 24, 35, 44))
-        cornerRadius = dp(if (round) 40 else 13).toFloat()
-        setStroke(dp(1), Color.rgb(100, 140, 145))
+    private fun buttonBackground(round: Boolean, fillAlpha: Int = 78) = GradientDrawable().apply {
+        setColor(Color.argb(fillAlpha, 18, 29, 37))
+        if (round) shape = GradientDrawable.OVAL else cornerRadius = dp(11).toFloat()
+        setStroke(dp(1), Color.argb(120, 142, 204, 192))
+    }
+
+    private inner class CrossPadBackground : Drawable() {
+        private val shape = Path()
+        private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+
+        override fun draw(canvas: Canvas) {
+            val s = bounds.width() / 3f
+            val x = bounds.left.toFloat()
+            val y = bounds.top.toFloat()
+            shape.reset()
+            shape.moveTo(x + s, y)
+            shape.lineTo(x + 2 * s, y)
+            shape.lineTo(x + 2 * s, y + s)
+            shape.lineTo(x + 3 * s, y + s)
+            shape.lineTo(x + 3 * s, y + 2 * s)
+            shape.lineTo(x + 2 * s, y + 2 * s)
+            shape.lineTo(x + 2 * s, y + 3 * s)
+            shape.lineTo(x + s, y + 3 * s)
+            shape.lineTo(x + s, y + 2 * s)
+            shape.lineTo(x, y + 2 * s)
+            shape.lineTo(x, y + s)
+            shape.lineTo(x + s, y + s)
+            shape.close()
+            paint.style = Paint.Style.FILL
+            paint.color = Color.argb(75, 18, 29, 37)
+            canvas.drawPath(shape, paint)
+            paint.style = Paint.Style.STROKE
+            paint.strokeWidth = dp(1).toFloat()
+            paint.color = Color.argb(125, 142, 204, 192)
+            canvas.drawPath(shape, paint)
+        }
+
+        override fun setAlpha(alpha: Int) = Unit
+        override fun setColorFilter(colorFilter: android.graphics.ColorFilter?) = Unit
+        @Suppress("DEPRECATION")
+        override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
     }
 
     private fun applyControlStyle() {
-        val scale = preferences.getInt("controlScale", 90) / 100f
         val opacity = preferences.getInt("controlOpacity", 85) / 100f
         listOf(dpad, actions, leftShoulder, rightShoulder, startSelect).forEach {
-            it.scaleX = scale
-            it.scaleY = scale
             it.alpha = opacity
         }
     }
@@ -288,11 +398,11 @@ class GameActivity : ComponentActivity() {
         dialog().setTitle("触屏按键")
             .setItems(arrayOf("按键大小：$scale%", "按键透明度：$opacity%")) { _, index ->
                 if (index == 0) {
-                    val values = intArrayOf(80, 90, 100, 110, 120)
+                    val values = intArrayOf(80, 90, 100, 110, 120, 135, 150, 170)
                     dialog().setTitle("按键大小")
                         .setSingleChoiceItems(values.map { "$it%" }.toTypedArray(), values.indexOf(scale)) { dialog, choice ->
                             preferences.edit().putInt("controlScale", values[choice]).apply()
-                            applyControlStyle()
+                            layoutScreen(root.width, root.height)
                             dialog.dismiss()
                         }.show()
                 } else {
@@ -413,7 +523,7 @@ class GameActivity : ComponentActivity() {
 
     private fun showMenu() {
         dialog().setTitle(game.title).setItems(arrayOf(
-            "继续游戏", "即时存档与读取", "游戏设置", "金手指", "重新开始", "返回游戏馆"
+            "继续游戏", "即时存档与读取（槽位 1–5）", "游戏设置", "金手指", "重新开始", "返回游戏馆"
         )) { _, index ->
             when (index) {
                 1 -> dialog().setTitle("即时进度")
@@ -543,6 +653,35 @@ class GameActivity : ComponentActivity() {
 
     private fun dialog(): android.app.AlertDialog.Builder =
         android.app.AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+
+    private fun updateQuickLoadButton() {
+        if (!::quickLoadButton.isInitialized) return
+        val exists = library.quickStateFile(game).exists()
+        quickLoadButton.setTextColor(if (exists) accent else Color.rgb(169, 179, 185))
+        quickLoadButton.contentDescription = if (exists) "快速读档，替换当前游戏进度"
+            else "快速读档，尚无快捷进度"
+    }
+
+    private fun quickSave() {
+        if (!ready) { message("游戏尚未加载完成"); return }
+        runCatching {
+            val state = retro.serializeState()
+            require(state.isNotEmpty()) { "模拟核心未返回进度" }
+            atomicWrite(library.quickStateFile(game), state)
+        }.onSuccess {
+            updateQuickLoadButton()
+            message("已快速存档；可点快读返回这一刻")
+        }.onFailure { message("快速存档失败：${it.message}") }
+    }
+
+    private fun quickLoad() {
+        if (!ready) { message("游戏尚未加载完成"); return }
+        val file = library.quickStateFile(game)
+        if (!file.exists()) { message("还没有快速存档，先点快存"); return }
+        runCatching { retro.unserializeState(file.readBytes()) }
+            .onSuccess { message(if (it) "已回到快速存档" else "快速存档与游戏不兼容") }
+            .onFailure { message("快速读档失败：${it.message}") }
+    }
 
     private fun selectStateSlot(save: Boolean) {
         val format = SimpleDateFormat("MM-dd HH:mm", Locale.getDefault())
